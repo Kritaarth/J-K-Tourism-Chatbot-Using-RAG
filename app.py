@@ -52,8 +52,8 @@ with st.sidebar:
     
     if api_key.startswith("sk-or-v1"):
         base_url = "https://openrouter.ai/api/v1"
-        model_name = "inclusionai/ling-2.6-1t:free" 
-        st.caption("✅ OpenRouter Key Detected: Using Nemotron 3 Nano Omni ")
+        model_name = "nvidia/nemotron-3-super-120b-a12b:free" 
+        st.caption("✅ OpenRouter Key Detected: Using Nemotron 3")
     else:
         base_url = None
         model_name = "gpt-3.5-turbo"
