@@ -6,10 +6,8 @@ A production-ready Retrieval-Augmented Generation (RAG) chatbot designed to prov
 
 ## ✨ Features
 
-* **Multi-Source Data Ingestion (Phase 1):**
+* **Data Ingestion (Phase 1):**
   * **PDF Ingestion:** Drop multiple tourism PDFs into the sidebar for chunking and indexing.
-  * **Pro Web Crawler:** Paste any base URL (e.g., official government portals) to dynamically deep-crawl pages using `RecursiveUrlLoader` and `BeautifulSoup`.
-* **Sub-Domain Isolation:** The built-in crawler restricts itself to the base domain, ensuring it doesn't leak into irrelevant external sites.
 * **Vector Storage:** Utilizing **FAISS** (Facebook AI Similarity Search) and cached `sentence-transformers` for super-fast in-memory document matching.
 * **RAG Pipeline Trace:** A real-time debugging visualizer in the sidebar that updates on every chat interaction, demonstrating how the data goes from **Ingestion** $\rightarrow$ **Retrieval** $\rightarrow$ **Generation**.
 * **Memory & Storage Guardrails:** Built-in automatic deletion of temporary files to eliminate server memory leaks and a capped trace log array to prevent UI lag.
