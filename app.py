@@ -7,9 +7,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS 
 from langchain_openai import ChatOpenAI
 
-
+# --- SETUP & CACHING ---
 st.set_page_config(page_title="J&K Tourism RAG Agent", page_icon="🏔️", layout="wide")
-
 
 st.markdown("""
 <style>
@@ -18,6 +17,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+@st.cache_resource
+def get_embedding_model():
+    """Loads the embedding model once and caches it in memory for speed."""
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+def add_trace_log(phase, msg, data):
+    """Helper to add logs and keep the array capped at 10 items to prevent UI lag."""
+    st.session_state.trace_logs.append({"phase": phase, "msg": msg, "data": data})
+    if len(st.session_state.trace_logs) > 10:
+        st.session_state.trace_logs.pop(0)
+
+# --- SESSION STATE ---
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Hello! I am the J&K Tourism RAG Agent."}]
 if "vector_store" not in st.session_state:
@@ -25,11 +36,10 @@ if "vector_store" not in st.session_state:
 if "trace_logs" not in st.session_state:
     st.session_state.trace_logs = []
 
-
+# --- SIDEBAR & CONFIGURATION ---
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-
     api_key = st.text_input("Enter OpenRouter Key", type="password")
     
     if api_key.startswith("sk-or-v1"):
@@ -52,29 +62,33 @@ with st.sidebar:
         else:
             with st.spinner("Ingesting and Embedding... (Using FAISS)"):
                 documents = []
+                
+                # 1. Process files with safe tempfile cleanup
                 for uploaded_file in uploaded_files:
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                         tmp_file.write(uploaded_file.read())
                         tmp_file_path = tmp_file.name
-                    loader = PyPDFLoader(tmp_file_path)
-                    documents.extend(loader.load())
+                    
+                    try:
+                        loader = PyPDFLoader(tmp_file_path)
+                        documents.extend(loader.load())
+                    finally:
+                        os.remove(tmp_file_path) # Clean up to prevent server memory leaks
                 
-                # Split Text
+                # 2. Split Text
                 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
                 chunks = text_splitter.split_documents(documents)
                 
-                # Create Embeddings using HuggingFace (Local CPU)
-                embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-                
-                # Store in FAISS
+                # 3. Create Embeddings (using cached model) & Store in FAISS
+                embeddings = get_embedding_model()
                 st.session_state.vector_store = FAISS.from_documents(chunks, embeddings)
                 
                 st.success(f"Indexed {len(chunks)} chunks!")
-                st.session_state.trace_logs.append({
-                    "phase": "Phase 1: Ingestion",
-                    "msg": f"Processed {len(uploaded_files)} files. Created {len(chunks)} vector chunks using FAISS.",
-                    "data": [d.metadata.get('source', 'Unknown') for d in documents[:3]]
-                })
+                add_trace_log(
+                    "Phase 1: Ingestion",
+                    f"Processed {len(uploaded_files)} files. Created {len(chunks)} vector chunks using FAISS.",
+                    [d.metadata.get('source', 'Unknown') for d in documents[:3]]
+                )
 
     st.divider()
     
@@ -112,16 +126,22 @@ if prompt := st.chat_input("Ask about Gulmarg, Safety, etc..."):
         retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 3})
         relevant_docs = retriever.invoke(prompt)
         
-        st.session_state.trace_logs.append({
-            "phase": "Phase 2: Retrieval",
-            "msg": f"Retrieved {len(relevant_docs)} chunks based on similarity.",
-            "data": [d.page_content[:100] for d in relevant_docs]
-        })
+        add_trace_log(
+            "Phase 2: Retrieval",
+            f"Retrieved {len(relevant_docs)} chunks based on similarity.",
+            [d.page_content[:100] for d in relevant_docs]
+        )
 
         # Phase 3: Generation
         context = "\n\n".join([d.page_content for d in relevant_docs])
-        system_prompt = "You are a helpful J&K Tourism Assistant. Answer based ONLY on the context provided."
         
+        # Enhanced System Prompt to enforce strict RAG behavior
+        system_prompt = """You are an expert J&K Tourism Assistant. 
+Use the provided context to answer the user's question. 
+If the answer is not contained in the context, say "I don't have enough information about that in my current documents, but I recommend checking the official J&K Tourism website." 
+Do NOT make up information."""
+        
+        # Initialize LLM
         llm = ChatOpenAI(
             model=model_name,
             openai_api_key=api_key,
@@ -145,11 +165,11 @@ if prompt := st.chat_input("Ask about Gulmarg, Safety, etc..."):
 
             message_placeholder.markdown(full_response)
             
-            st.session_state.trace_logs.append({
-                "phase": "Phase 3: Generation",
-                "msg": f"Generated answer using {model_name}",
-                "data": full_response[:100] + "..."
-            })
+            add_trace_log(
+                "Phase 3: Generation",
+                f"Generated answer using {model_name}",
+                full_response[:100] + "..."
+            )
             
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
