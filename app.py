@@ -1,10 +1,7 @@
 import streamlit as st
 import os
 import tempfile
-import re
-from bs4 import BeautifulSoup
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.document_loaders.recursive_url_loader import RecursiveUrlLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS 
@@ -24,11 +21,6 @@ st.markdown("""
 def get_embedding_model():
     """Loads the embedding model once and caches it in memory for speed."""
     return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-def bs4_extractor(html: str) -> str:
-    """Extracts clean text from raw HTML using BeautifulSoup."""
-    soup = BeautifulSoup(html, "html.parser")
-    return re.sub(r"\n\n+", "\n\n", soup.text).strip()
 
 def add_trace_log(phase, msg, data):
     """Helper to add logs and keep the array capped at 10 items to prevent UI lag."""
@@ -53,7 +45,7 @@ with st.sidebar:
     if api_key.startswith("sk-or-v1"):
         base_url = "https://openrouter.ai/api/v1"
         model_name = "nvidia/nemotron-3-super-120b-a12b:free" 
-        st.caption("✅ OpenRouter Key Detected: Using Nemotron 3")
+        st.caption("✅ OpenRouter Key Detected: Using Nemotron 3 ")
     else:
         base_url = None
         model_name = "gpt-3.5-turbo"
@@ -62,83 +54,41 @@ with st.sidebar:
     st.divider()
 
     st.subheader("📂 Knowledge Base (Phase 1)")
-    
-    # PDF Upload
     uploaded_files = st.file_uploader("Upload Tourism PDFs", accept_multiple_files=True, type="pdf")
     
-    # URL Input & Crawler Settings
-    website_url = st.text_input("Or paste a base URL to crawl (e.g., https://tourism.jk.gov.in)")
-    crawl_depth = st.slider("Crawl Depth", min_value=1, max_value=3, value=1, help="1 = Main page + its links. Higher depths take longer to process.")
-    
-    if st.button("Process Documents & URLs"):
+    if uploaded_files and st.button("Process Documents"):
         if not api_key:
             st.error("Please enter an API Key first.")
-        elif not uploaded_files and not website_url:
-            st.warning("Please upload a PDF or enter a URL.")
         else:
-            with st.spinner("Ingesting, Crawling, and Embedding... (This may take a while)"):
+            with st.spinner("Ingesting and Embedding... (Using FAISS)"):
                 documents = []
                 
-                # 1A. Process PDFs
-                if uploaded_files:
-                    for uploaded_file in uploaded_files:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                            tmp_file.write(uploaded_file.read())
-                            tmp_file_path = tmp_file.name
-                        
-                        try:
-                            loader = PyPDFLoader(tmp_file_path)
-                            documents.extend(loader.load())
-                        finally:
-                            os.remove(tmp_file_path) 
-                            
-                # 1B. Process Website URL (Deep Crawl with Anti-Bot Protection)
-                if website_url:
+                # 1. Process files with safe tempfile cleanup
+                for uploaded_file in uploaded_files:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                        tmp_file.write(uploaded_file.read())
+                        tmp_file_path = tmp_file.name
+                    
                     try:
-                        st.toast(f"Starting deep crawl of {website_url} at depth {crawl_depth}...")
-                        
-                        # Custom headers spoofing a real desktop browser to prevent 403 blocks
-                        custom_headers = {
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                        }
-                        
-                        loader = RecursiveUrlLoader(
-                            url=website_url,
-                            max_depth=crawl_depth,
-                            extractor=bs4_extractor,
-                            prevent_outside=True, # Prevents crawler from leaving the base domain
-                            headers=custom_headers # Employs browser spoofing headers
-                        )
-                        web_docs = loader.load()
-                        documents.extend(web_docs)
-                        st.toast(f"Successfully scraped {len(web_docs)} pages from the website!")
-                    except Exception as e:
-                        st.error(f"Failed to crawl URL: {e}")
+                        loader = PyPDFLoader(tmp_file_path)
+                        documents.extend(loader.load())
+                    finally:
+                        os.remove(tmp_file_path) # Clean up to prevent server memory leaks
                 
-                # 2. Split Text 
-                if documents:
-                    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-                    chunks = text_splitter.split_documents(documents)
-                    
-                    # 3. Create Embeddings & Store in FAISS
-                    embeddings = get_embedding_model()
-                    
-                    # Create vector store only if chunks were extracted
-                    if chunks:
-                        st.session_state.vector_store = FAISS.from_documents(chunks, embeddings)
-                        st.success(f"Indexed {len(chunks)} chunks!")
-                        
-                        num_web_pages = len(web_docs) if website_url and 'web_docs' in locals() else 0
-                        add_trace_log(
-                            "Phase 1: Ingestion",
-                            f"Processed {len(uploaded_files) if uploaded_files else 0} PDFs and crawled {num_web_pages} web pages. Created {len(chunks)} chunks.",
-                            [d.metadata.get('source', 'Unknown') for d in documents[:3]]
-                        )
-                    else:
-                        st.warning("No text could be extracted from the provided files/URLs.")
-                else:
-                    st.warning("No documents were loaded. Please check your files or URL.")
+                # 2. Split Text
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                chunks = text_splitter.split_documents(documents)
+                
+                # 3. Create Embeddings (using cached model) & Store in FAISS
+                embeddings = get_embedding_model()
+                st.session_state.vector_store = FAISS.from_documents(chunks, embeddings)
+                
+                st.success(f"Indexed {len(chunks)} chunks!")
+                add_trace_log(
+                    "Phase 1: Ingestion",
+                    f"Processed {len(uploaded_files)} files. Created {len(chunks)} vector chunks using FAISS.",
+                    [d.metadata.get('source', 'Unknown') for d in documents[:3]]
+                )
 
     st.divider()
     
@@ -160,7 +110,7 @@ if prompt := st.chat_input("Ask about Gulmarg, Safety, etc..."):
         st.error("API Key required.")
         st.stop()
     if not st.session_state.vector_store:
-        st.error("Please upload documents or scrape a URL first.")
+        st.error("Please upload documents first.")
         st.stop()
 
     # User Message
