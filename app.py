@@ -92,15 +92,23 @@ with st.sidebar:
                         finally:
                             os.remove(tmp_file_path) 
                             
-                # 1B. Process Website URL (Deep Crawl)
+                # 1B. Process Website URL (Deep Crawl with Anti-Bot Protection)
                 if website_url:
                     try:
                         st.toast(f"Starting deep crawl of {website_url} at depth {crawl_depth}...")
+                        
+                        # Custom headers spoofing a real desktop browser to prevent 403 blocks
+                        custom_headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                        }
+                        
                         loader = RecursiveUrlLoader(
                             url=website_url,
                             max_depth=crawl_depth,
                             extractor=bs4_extractor,
-                            prevent_outside=True # Prevents crawler from leaving the base domain
+                            prevent_outside=True, # Prevents crawler from leaving the base domain
+                            headers=custom_headers # Employs browser spoofing headers
                         )
                         web_docs = loader.load()
                         documents.extend(web_docs)
